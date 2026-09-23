@@ -4,9 +4,11 @@ import { blobKeys, db } from './db.js';
 import { icon } from './icons.js';
 import { buildPDF } from './pdf.js';
 import { FILTERS, PAPER, prepareOriginal, renderPage } from './processing.js';
+import { busy, confirmDialog, menuSheet, openDialog, promptDialog, toast } from './ui.js';
 import { fmtBytes, fmtDate, h, nextFrame, safeFileName, uid } from './util.js';
 
 const app = document.getElementById('app');
+const PAPER_LABELS = Object.fromEntries(Object.entries(PAPER).map(([k, v]) => [k, v.label]));
 
 // MARK: - การตั้งค่า (เก็บในเครื่อง)
 
@@ -41,7 +43,7 @@ function routeKey(r) {
 }
 
 function render() {
-  const content = app.querySelector('.content');
+  const content = app.querySelector('.app-content');
   if (content) scrollMemo.set(app.dataset.route, content.scrollTop);
 
   const r = state.route;
@@ -50,7 +52,7 @@ function render() {
   app.dataset.route = key;
   app.replaceChildren(view);
 
-  const next = app.querySelector('.content');
+  const next = app.querySelector('.app-content');
   if (next) next.scrollTop = scrollMemo.get(key) || 0;
 }
 
@@ -84,105 +86,121 @@ function invalidateImages(pageId) {
   }
 }
 
-// MARK: - UI ทั่วไป
+// MARK: - โครงหน้าจอ
 
-function header({ title, left, right, onTitle, large }) {
-  return h('header', { class: `bar top${large ? ' large' : ''}` },
-    h('div', { class: 'bar-side' }, left),
-    h('div', { class: `bar-title${onTitle ? ' tappable' : ''}`, onclick: onTitle }, title),
-    h('div', { class: 'bar-side right' }, right));
+function screen(...children) {
+  return h('div', { class: 'app-screen' }, ...children);
 }
 
-function iconButton(name, label, onclick, extra = {}) {
-  return h('button', { class: 'icon-btn', 'aria-label': label, title: label, onclick, ...extra }, icon(name));
+/** แถบบนสีกรมท่าแบบ ds-header */
+function appBar({ title, brand, left, right, onTitle }) {
+  let center;
+  if (brand) {
+    center = h('div', { class: 'ds-brand app-bar__brand' });
+    center.innerHTML = `${window.DS.logo('inverse')}<span class="ds-brand__name"><span>6Th</span>Sense</span>`;
+    center.append(h('span', { class: 'ds-brand__suffix' }, 'สแกนเอกสาร'));
+  } else if (onTitle) {
+    center = h('button', { type: 'button', class: 'app-bar__title app-bar__title--button', onclick: onTitle },
+      h('span', { class: 'ds-truncate' }, title), icon('pencil', 'sm'));
+  } else {
+    center = h('h1', { class: 'app-bar__title ds-truncate' }, title);
+  }
+  return h('header', { class: 'ds-header app-bar' },
+    h('div', { class: 'app-bar__inner' },
+      h('div', { class: 'app-bar__side' }, left),
+      center,
+      h('div', { class: 'app-bar__side app-bar__side--end' }, right)));
+}
+
+function barButton(iconName, label, onclick, extra = {}) {
+  return h('button', {
+    type: 'button', class: 'ds-btn ds-btn--ghost ds-btn--icon', 'aria-label': label, title: label, onclick, ...extra,
+  }, icon(iconName));
 }
 
 function backButton(label, onclick) {
-  return h('button', { class: 'btn text back', onclick }, icon('back'), label);
+  return h('button', { type: 'button', class: 'ds-btn ds-btn--ghost app-bar__back', onclick }, icon('back'), label);
 }
 
-function segmented(options, value, onChange, disabled) {
-  return h('div', { class: 'segmented', role: 'group' },
-    Object.entries(options).map(([key, label]) =>
-      h('button', {
-        class: key === value ? 'selected' : '',
-        disabled,
-        'aria-pressed': key === value ? 'true' : 'false',
-        onclick: () => key !== value && onChange(key),
-      }, label)));
+function content(...children) {
+  return h('main', { class: 'app-content' }, h('div', { class: 'ds-container ds-container--narrow app-container' }, ...children));
 }
 
-function busy(message) {
-  let el = document.getElementById('busy');
-  if (!message) { el?.remove(); return; }
-  if (!el) {
-    el = h('div', { id: 'busy', class: 'busy' },
-      h('div', { class: 'busy-box' }, h('div', { class: 'spinner' }), h('div', { class: 'busy-msg' })));
-    document.body.append(el);
-  }
-  el.querySelector('.busy-msg').textContent = message;
+function bottomBar(...buttons) {
+  return h('footer', { class: 'app-bottom' }, h('div', { class: 'ds-container ds-container--narrow app-bottom__inner' }, ...buttons));
 }
 
-function toast(message) {
-  const el = h('div', { class: 'toast' }, message);
-  document.body.append(el);
-  setTimeout(() => el.classList.add('hide'), 2200);
-  setTimeout(() => el.remove(), 2600);
-}
-
-/** แผ่นเมนูจากด้านล่าง: items = [{ label, icon, danger, onClick }] */
-function actionSheet(title, items) {
-  const close = () => backdrop.remove();
-  const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => e.target === backdrop && close() },
-    h('div', { class: 'sheet' },
-      title && h('div', { class: 'sheet-title' }, title),
-      items.map((item) => h('button', {
-        class: `sheet-item${item.danger ? ' danger' : ''}`,
-        onclick: () => { close(); item.onClick(); },
-      }, item.icon && icon(item.icon, 20), item.label)),
-      h('button', { class: 'sheet-item cancel', onclick: close }, 'ยกเลิก')));
-  document.body.append(backdrop);
+function segmented(label, options, value, onChange, disabled) {
+  return h('div', { class: 'ds-field' },
+    h('span', { class: 'ds-label' }, label),
+    h('div', { class: 'ds-segmented ds-segmented--block', role: 'group', 'aria-label': label },
+      Object.entries(options).map(([key, text]) =>
+        h('button', {
+          type: 'button',
+          class: 'ds-segmented__item',
+          'aria-pressed': key === value ? 'true' : 'false',
+          disabled,
+          onclick: () => key !== value && onChange(key),
+        }, text))));
 }
 
 // MARK: - หน้ารายการเอกสาร
 
 function libraryView() {
-  const list = state.docs.length
-    ? h('div', { class: 'doc-list' }, state.docs.map(docCard))
-    : h('div', { class: 'empty' },
-      icon('scan', 56),
-      h('h2', null, 'ยังไม่มีเอกสาร'),
-      h('p', null, 'กด "สแกนเอกสาร" ด้านล่างเพื่อเริ่ม'));
+  const count = state.docs.length;
+  const list = count
+    ? h('div', { class: 'ds-card' },
+      h('ul', { class: 'ds-list app-doc-list' }, state.docs.map(docRow)))
+    : h('button', { type: 'button', class: 'ds-dropzone ds-dropzone--fill', onclick: () => startCamera(null) },
+      h('span', { class: 'ds-dropzone__icon' }, icon('camera', 'lg')),
+      h('span', { class: 'ds-dropzone__title' }, h('strong', null, 'แตะเพื่อสแกน'), ' เอกสารแรก'),
+      h('span', { class: 'ds-dropzone__hint' }, 'หรือเลือกภาพที่มีอยู่แล้วจากปุ่ม "รูปภาพ" ด้านล่าง'));
 
-  return h('div', { class: 'screen' },
-    header({ title: 'เอกสาร', large: true, right: iconButton('settings', 'ตั้งค่า', openSettings) }),
-    h('main', { class: 'content' }, installHint(), list),
-    h('footer', { class: 'bar bottom' },
-      h('button', { class: 'btn primary grow', onclick: () => startCamera(null) }, icon('camera'), 'สแกนเอกสาร'),
-      h('button', { class: 'btn', onclick: () => pickPhotos(null) }, icon('image'), 'รูปภาพ')));
+  return screen(
+    appBar({ brand: true, right: barButton('settings', 'ตั้งค่า', openSettings) }),
+    content(
+      h('div', { class: 'ds-page-header' },
+        h('div', null,
+          h('h1', { class: 'ds-page-header__title' }, 'เอกสาร'),
+          h('p', { class: 'ds-page-header__desc' },
+            count ? `${count} รายการ · เก็บไว้ในเครื่องนี้เท่านั้น` : 'สแกน ปรับเป็น A4 แล้วส่งเป็น PDF หรือรูปภาพ'))),
+      installHint(),
+      list),
+    bottomBar(
+      h('button', { type: 'button', class: 'ds-btn ds-btn--lg', onclick: () => pickPhotos(null) }, icon('image'), 'รูปภาพ'),
+      h('button', { type: 'button', class: 'ds-btn ds-btn--primary ds-btn--lg app-grow', onclick: () => startCamera(null) },
+        icon('camera'), 'สแกนเอกสาร')));
 }
 
-function docCard(doc) {
+function docRow(doc) {
   const first = doc.pages[0];
-  return h('button', { class: 'doc-card', onclick: () => go({ name: 'doc', docId: doc.id }) },
-    h('div', { class: 'doc-thumb' }, first && blobImage(first.id, 'thumb', first.rev)),
-    h('div', { class: 'doc-info' },
-      h('div', { class: 'doc-name' }, doc.name),
-      h('div', { class: 'doc-meta' }, `${doc.pages.length} หน้า · ${fmtDate(doc.updatedAt)}`)),
-    icon('next', 18));
+  const open = () => go({ name: 'doc', docId: doc.id });
+  return h('li', {
+    class: 'ds-list-item app-doc-list__item', role: 'button', tabindex: '0',
+    onclick: open,
+    onkeydown: (e) => { if (e.key === 'Enter') open(); },
+  },
+  h('div', { class: 'ds-thumb app-doc-thumb' }, first && blobImage(first.id, 'thumb', first.rev)),
+  h('div', { class: 'ds-list-item__body' },
+    h('div', { class: 'ds-list-item__title' }, doc.name),
+    h('div', { class: 'ds-list-item__meta' }, `${doc.pages.length} หน้า · ${fmtDate(doc.updatedAt)}`)),
+  h('div', { class: 'ds-list-item__actions ds-text-secondary' }, icon('next')));
 }
 
 function installHint() {
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  if (standalone || localStorage.getItem('scansv.hideInstall')) return null;
-  const el = h('div', { class: 'hint' },
-    h('div', null,
-      h('strong', null, 'ติดตั้งเป็นแอป'),
-      h('p', null, 'ใน Safari กด ', icon('share', 16), ' แชร์ → "เพิ่มไปยังหน้าจอโฮม" เพื่อเปิดแบบเต็มจอและเก็บข้อมูลได้ถาวร')),
+  let hidden = false;
+  try { hidden = !!localStorage.getItem('scansv.hideInstall'); } catch { /* */ }
+  if (standalone || hidden) return null;
+  const el = h('div', { class: 'ds-alert ds-alert--info app-hint' },
+    icon('info'),
+    h('div', { class: 'ds-alert__content' },
+      h('div', { class: 'ds-alert__title' }, 'ติดตั้งเป็นแอป'),
+      h('div', null, 'ใน Safari กดปุ่มแชร์ → "เพิ่มไปยังหน้าจอโฮม" เพื่อเปิดแบบเต็มจอและเก็บข้อมูลได้ถาวร')),
     h('button', {
-      class: 'icon-btn', 'aria-label': 'ปิด',
+      type: 'button', class: 'ds-btn ds-btn--ghost ds-btn--icon ds-btn--sm', 'aria-label': 'ปิด',
       onclick: () => { try { localStorage.setItem('scansv.hideInstall', '1'); } catch { /* */ } el.remove(); },
-    }, icon('close', 18)));
+    }, icon('close')));
   return el;
 }
 
@@ -192,53 +210,70 @@ function docView(r) {
   const doc = findDoc(r.docId);
   if (!doc) return libraryView();
   const arranging = !!r.arranging;
+  if (!arranging && !doc.pages.some((p) => state.processing.has(p.id))) warmExports(doc.pages, doc.name);
 
-  const tiles = doc.pages.map((page, i) => {
-    const tile = h('div', { class: `tile${state.processing.has(page.id) ? ' processing' : ''}` },
-      h('div', { class: 'tile-img' }, blobImage(page.id, 'thumb', page.rev)),
-      h('div', { class: 'tile-label' },
-        h('span', { class: 'tile-num' }, String(i + 1)),
-        h('span', null, `${PAPER[page.paper]?.label} · ${FILTERS[page.filter]}`)));
+  const cards = doc.pages.map((page, i) => {
+    const open = () => go({ name: 'page', docId: doc.id, pageId: page.id });
+    const card = h('div', { class: 'ds-media-card app-page-card' },
+      h('div', { class: 'ds-media-card__media app-page-card__media' },
+        blobImage(page.id, 'thumb', page.rev),
+        h('span', { class: 'ds-media-card__corner ds-media-card__corner--left' },
+          h('span', { class: 'ds-badge ds-badge--primary' }, String(i + 1))),
+        state.processing.has(page.id) && h('span', { class: 'ds-media-card__corner' },
+          h('span', { class: 'ds-badge' }, h('span', { class: 'ds-spinner' })))),
+      h('div', { class: 'ds-media-card__body' },
+        h('div', { class: 'ds-media-card__text' },
+          h('div', { class: 'ds-media-card__title' }, `หน้า ${i + 1}`),
+          h('div', { class: 'ds-media-card__meta' }, `${PAPER_LABELS[page.paper]} · ${FILTERS[page.filter]}`))));
+
     if (arranging) {
-      tile.append(h('div', { class: 'tile-actions' },
-        iconButton('prev', 'เลื่อนไปก่อนหน้า', () => movePage(doc, i, -1), { disabled: i === 0 }),
-        iconButton('trash', 'ลบหน้า', () => deletePage(doc, page.id), { class: 'icon-btn danger' }),
-        iconButton('next', 'เลื่อนไปถัดไป', () => movePage(doc, i, 1), { disabled: i === doc.pages.length - 1 })));
+      card.append(h('div', { class: 'app-page-card__actions' },
+        h('button', { type: 'button', class: 'ds-btn ds-btn--sm ds-btn--icon', 'aria-label': 'เลื่อนไปก่อนหน้า', disabled: i === 0, onclick: () => movePage(doc, i, -1) }, icon('prev')),
+        h('button', { type: 'button', class: 'ds-btn ds-btn--danger-ghost ds-btn--sm ds-btn--icon', 'aria-label': 'ลบหน้า', onclick: () => deletePage(doc, page.id) }, icon('trash')),
+        h('button', { type: 'button', class: 'ds-btn ds-btn--sm ds-btn--icon', 'aria-label': 'เลื่อนไปถัดไป', disabled: i === doc.pages.length - 1, onclick: () => movePage(doc, i, 1) }, icon('next'))));
     } else {
-      tile.addEventListener('click', () => go({ name: 'page', docId: doc.id, pageId: page.id }));
-      tile.classList.add('tappable');
+      card.classList.add('is-tappable');
+      card.tabIndex = 0;
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
     }
-    return tile;
+    return card;
   });
 
-  return h('div', { class: 'screen' },
-    header({
+  return screen(
+    appBar({
       title: doc.name,
       onTitle: () => renameDoc(doc),
       left: backButton('เอกสาร', () => go({ name: 'library' })),
       right: arranging
-        ? h('button', { class: 'btn text strong', onclick: () => go({ ...r, arranging: false }) }, 'เสร็จ')
+        ? h('button', { type: 'button', class: 'ds-btn ds-btn--secondary ds-btn--sm', onclick: () => go({ ...r, arranging: false }) }, icon('check'), 'เสร็จ')
         : [
-          iconButton('reorder', 'จัดเรียง / ลบหน้า', () => go({ ...r, arranging: true })),
-          iconButton('more', 'เพิ่มเติม', () => actionSheet(doc.name, [
+          barButton('reorder', 'จัดเรียง / ลบหน้า', () => go({ ...r, arranging: true }), { disabled: !doc.pages.length }),
+          barButton('more', 'เพิ่มเติม', () => menuSheet(doc.name, [
             { label: 'เปลี่ยนชื่อ', icon: 'pencil', onClick: () => renameDoc(doc) },
             { label: 'ลบเอกสาร', icon: 'trash', danger: true, onClick: () => deleteDoc(doc) },
           ])),
         ],
     }),
-    h('main', { class: 'content' },
-      arranging && h('p', { class: 'note' }, 'ใช้ปุ่มลูกศรเพื่อเรียงหน้า หรือถังขยะเพื่อลบหน้า'),
-      doc.pages.length ? h('div', { class: 'page-grid' }, tiles) : h('div', { class: 'empty' }, h('p', null, 'ไม่มีหน้า — กด "เพิ่มหน้า"'))),
-    h('footer', { class: 'bar bottom' },
+    content(
+      arranging && h('div', { class: 'ds-alert ds-alert--info app-hint' },
+        icon('info'),
+        h('div', { class: 'ds-alert__content' }, 'ใช้ปุ่มลูกศรเพื่อเรียงหน้า หรือปุ่มถังขยะเพื่อลบหน้า แล้วกด "เสร็จ"')),
+      doc.pages.length
+        ? h('div', { class: 'ds-grid ds-grid--auto app-page-grid' }, cards)
+        : h('div', { class: 'ds-card ds-empty' }, 'ยังไม่มีหน้า — กด "เพิ่มหน้า" ด้านล่าง')),
+    bottomBar(
       h('button', {
-        class: 'btn',
-        onclick: () => actionSheet('เพิ่มหน้า', [
+        type: 'button', class: 'ds-btn ds-btn--lg',
+        onclick: () => menuSheet('เพิ่มหน้า', [
           { label: 'ถ่ายด้วยกล้อง', icon: 'camera', onClick: () => startCamera(doc.id) },
           { label: 'เลือกจากรูปภาพ', icon: 'image', onClick: () => pickPhotos(doc.id) },
         ]),
       }, icon('plus'), 'เพิ่มหน้า'),
-      h('button', { class: 'btn primary grow', disabled: !doc.pages.length, onclick: () => exportPDF(doc, doc.pages, doc.name) }, icon('file'), 'แชร์ PDF'),
-      h('button', { class: 'btn', disabled: !doc.pages.length, onclick: () => exportImages(doc, doc.pages, doc.name) }, icon('image'), 'รูป')));
+      h('button', {
+        type: 'button', class: 'ds-btn ds-btn--primary ds-btn--lg app-grow',
+        disabled: !doc.pages.length, onclick: () => exportMenu(doc.pages, doc.name),
+      }, icon('share'), 'แชร์ / บันทึก')));
 }
 
 // MARK: - หน้าแก้ไขหน้าเดียว
@@ -252,12 +287,14 @@ function pageView(r) {
   const isBusy = state.processing.has(page.id);
   const goTo = (i) => go({ name: 'page', docId: doc.id, pageId: doc.pages[i].id });
   const update = (changes) => updatePage(doc, page, changes);
+  const pageName = `${doc.name} หน้า ${index + 1}`;
+  if (!isBusy) warmExports([page], pageName);
 
-  const preview = h('div', { class: `preview${isBusy ? ' processing' : ''}` },
-    blobImage(page.id, 'proc', page.rev, 'preview-img'),
-    isBusy && h('div', { class: 'preview-spinner' }, h('div', { class: 'spinner' })),
-    index > 0 && h('button', { class: 'nav-arrow left', 'aria-label': 'หน้าก่อน', onclick: () => goTo(index - 1) }, icon('prev')),
-    index < total - 1 && h('button', { class: 'nav-arrow right', 'aria-label': 'หน้าถัดไป', onclick: () => goTo(index + 1) }, icon('next')));
+  const preview = h('div', { class: `app-preview${isBusy ? ' is-busy' : ''}` },
+    blobImage(page.id, 'proc', page.rev, 'app-preview__img'),
+    isBusy && h('span', { class: 'app-preview__spinner' }, h('span', { class: 'ds-spinner ds-spinner--lg' })),
+    index > 0 && h('button', { type: 'button', class: 'ds-btn ds-btn--icon app-preview__nav app-preview__nav--prev', 'aria-label': 'หน้าก่อน', onclick: () => goTo(index - 1) }, icon('prev')),
+    index < total - 1 && h('button', { type: 'button', class: 'ds-btn ds-btn--icon app-preview__nav app-preview__nav--next', 'aria-label': 'หน้าถัดไป', onclick: () => goTo(index + 1) }, icon('next')));
 
   // ปัดซ้าย/ขวาเพื่อเปลี่ยนหน้า
   let touchX = null;
@@ -270,41 +307,43 @@ function pageView(r) {
     if (dx > 60 && index > 0) goTo(index - 1);
   });
 
-  const bwControl = page.filter === 'bw' && h('label', { class: 'slider' },
-    h('span', null, 'จาง'),
+  const level = page.bwLevel ?? 0.72;
+  const levelValue = h('span', { class: 'ds-label__value' }, `${Math.round(level * 100)}%`);
+  const bwControl = page.filter === 'bw' && h('div', { class: 'ds-field' },
+    h('label', { class: 'ds-label', for: 'bw-level' }, 'ความเข้มขาวดำ', levelValue),
     h('input', {
-      type: 'range', min: '0.5', max: '0.95', step: '0.01', value: String(page.bwLevel ?? 0.72),
+      id: 'bw-level', class: 'ds-range', type: 'range', min: '0.5', max: '0.95', step: '0.01', value: String(level),
       disabled: isBusy,
+      oninput: (e) => { levelValue.textContent = `${Math.round(Number(e.target.value) * 100)}%`; },
       onchange: (e) => update({ bwLevel: Number(e.target.value) }),
-    }),
-    h('span', null, 'เข้ม'));
+    }));
 
-  return h('div', { class: 'screen' },
-    header({
-      title: `หน้า ${index + 1}/${total}`,
+  return screen(
+    appBar({
+      title: `หน้า ${index + 1} จาก ${total}`,
       left: backButton('หน้าทั้งหมด', () => go({ name: 'doc', docId: doc.id })),
-      right: iconButton('more', 'เพิ่มเติม', () => actionSheet(`หน้า ${index + 1}`, [
-        { label: 'แชร์หน้านี้เป็น PDF', icon: 'file', onClick: () => exportPDF(doc, [page], `${doc.name} หน้า ${index + 1}`) },
-        { label: 'แชร์หน้านี้เป็นรูปภาพ', icon: 'image', onClick: () => exportImages(doc, [page], `${doc.name} หน้า ${index + 1}`) },
+      right: barButton('more', 'เพิ่มเติม', () => menuSheet(`หน้า ${index + 1}`, [
+        { label: 'แชร์ / บันทึกหน้านี้', icon: 'share', onClick: () => exportMenu([page], pageName) },
         { label: 'ใช้ขนาดและฟิลเตอร์นี้กับทุกหน้า', icon: 'layers', onClick: () => applyToAll(doc, page) },
         { label: 'ลบหน้านี้', icon: 'trash', danger: true, onClick: () => deletePage(doc, page.id) },
       ]), { disabled: isBusy }),
     }),
-    h('main', { class: 'editor' },
+    h('main', { class: 'app-editor' },
       preview,
-      h('div', { class: 'controls' },
-        segmented(FILTERS, page.filter, (filter) => update({ filter }), isBusy),
-        bwControl,
-        segmented(Object.fromEntries(Object.entries(PAPER).map(([k, v]) => [k, v.label])), page.paper, (paper) => update({ paper }), isBusy),
-        h('div', { class: 'tools' },
-          toolButton('crop', 'ปรับขอบ', () => cropPage(doc, page), isBusy),
-          toolButton('rotateLeft', 'หมุนซ้าย', () => update({ rotation: ((page.rotation || 0) + 3) % 4 }), isBusy),
-          toolButton('rotateRight', 'หมุนขวา', () => update({ rotation: ((page.rotation || 0) + 1) % 4 }), isBusy),
-          toolButton('share', 'แชร์', () => exportPDF(doc, [page], `${doc.name} หน้า ${index + 1}`), isBusy)))));
+      h('section', { class: 'app-controls' },
+        h('div', { class: 'ds-container ds-container--narrow ds-stack ds-stack--md' },
+          segmented('ฟิลเตอร์', FILTERS, page.filter, (filter) => update({ filter }), isBusy),
+          bwControl,
+          segmented('ขนาดกระดาษ', PAPER_LABELS, page.paper, (paper) => update({ paper }), isBusy),
+          h('div', { class: 'app-tools' },
+            toolButton('crop', 'ปรับขอบ', () => cropPage(doc, page), isBusy),
+            toolButton('rotateLeft', 'หมุนซ้าย', () => update({ rotation: ((page.rotation || 0) + 3) % 4 }), isBusy),
+            toolButton('rotateRight', 'หมุนขวา', () => update({ rotation: ((page.rotation || 0) + 1) % 4 }), isBusy),
+            toolButton('share', 'แชร์', () => exportMenu([page], pageName), isBusy))))));
 }
 
 function toolButton(iconName, label, onclick, disabled) {
-  return h('button', { class: 'tool', onclick, disabled }, icon(iconName), h('span', null, label));
+  return h('button', { type: 'button', class: 'ds-btn app-tool', onclick, disabled }, icon(iconName), h('span', null, label));
 }
 
 // MARK: - การทำงานกับเอกสาร
@@ -345,7 +384,7 @@ async function importImages(blobs, docId, detect) {
   let added = 0;
   try {
     for (let i = 0; i < blobs.length; i++) {
-      busy(`กำลังประมวลผลหน้า ${i + 1}/${blobs.length}`);
+      busy(`กำลังประมวลผลหน้า ${i + 1}/${blobs.length}…`);
       await nextFrame();
       try {
         const { original, quad } = await prepareOriginal(blobs[i], detect);
@@ -359,12 +398,13 @@ async function importImages(blobs, docId, detect) {
         added++;
       } catch (err) {
         console.error(err);
-        toast(`ภาพที่ ${i + 1} ประมวลผลไม่สำเร็จ`);
+        toast(`ภาพที่ ${i + 1} ประมวลผลไม่สำเร็จ`, 'error');
       }
     }
     if (added) {
       await saveDoc(doc);
       state.route = { name: 'doc', docId: doc.id };
+      toast(`เพิ่ม ${added} หน้าแล้ว`, 'success');
     }
   } finally {
     busy(null);
@@ -380,7 +420,7 @@ async function updatePage(doc, page, changes) {
     await rerender(page);
   } catch (err) {
     console.error(err);
-    toast('ประมวลผลไม่สำเร็จ');
+    toast('ประมวลผลไม่สำเร็จ', 'error');
   } finally {
     state.processing.delete(page.id);
     await saveDoc(doc);
@@ -409,17 +449,21 @@ async function cropPage(doc, page) {
 async function applyToAll(doc, source) {
   const targets = doc.pages.filter((p) =>
     p.id !== source.id && (p.paper !== source.paper || p.filter !== source.filter || p.bwLevel !== source.bwLevel));
+  if (!targets.length) {
+    toast('ทุกหน้าใช้ค่านี้อยู่แล้ว', 'info');
+    return;
+  }
   try {
     for (let i = 0; i < targets.length; i++) {
-      busy(`กำลังปรับหน้า ${i + 1}/${targets.length}`);
+      busy(`กำลังปรับหน้า ${i + 1}/${targets.length}…`);
       Object.assign(targets[i], { paper: source.paper, filter: source.filter, bwLevel: source.bwLevel });
       await rerender(targets[i]);
     }
     await saveDoc(doc);
-    toast(targets.length ? `ปรับ ${targets.length} หน้าแล้ว` : 'ทุกหน้าใช้ค่านี้อยู่แล้ว');
+    toast(`ปรับ ${targets.length} หน้าแล้ว`, 'success');
   } catch (err) {
     console.error(err);
-    toast('ปรับบางหน้าไม่สำเร็จ');
+    toast('ปรับบางหน้าไม่สำเร็จ', 'error');
   } finally {
     busy(null);
     render();
@@ -436,71 +480,167 @@ async function movePage(doc, index, delta) {
 }
 
 async function deletePage(doc, pageId) {
-  if (!confirm('ลบหน้านี้?')) return;
+  const ok = await confirmDialog({
+    title: 'ลบหน้านี้?', message: 'หน้านี้จะถูกลบออกจากเอกสาร และกู้คืนไม่ได้',
+    confirmText: 'ลบหน้า', variant: 'danger',
+  });
+  if (!ok) return;
   doc.pages = doc.pages.filter((p) => p.id !== pageId);
   await db.deleteBlobs(blobKeys(pageId));
   invalidateImages(pageId);
   await saveDoc(doc);
   if (state.route.name === 'page') state.route = { name: 'doc', docId: doc.id, arranging: false };
   render();
+  toast('ลบหน้าแล้ว', 'success');
 }
 
 async function renameDoc(doc) {
-  const name = prompt('ชื่อเอกสาร', doc.name);
-  if (name == null || !name.trim()) return;
+  const name = await promptDialog({ title: 'เปลี่ยนชื่อเอกสาร', label: 'ชื่อเอกสาร', value: doc.name });
+  if (name == null || !name.trim() || name.trim() === doc.name) return;
   doc.name = name.trim();
   await saveDoc(doc);
   render();
 }
 
 async function deleteDoc(doc) {
-  if (!confirm(`ลบ "${doc.name}" และทุกหน้าในเอกสารนี้?`)) return;
+  const ok = await confirmDialog({
+    title: 'ลบเอกสารนี้?', message: `"${doc.name}" และทั้ง ${doc.pages.length} หน้าจะถูกลบ และกู้คืนไม่ได้`,
+    confirmText: 'ลบเอกสาร', variant: 'danger',
+  });
+  if (!ok) return;
   await db.deleteBlobs(doc.pages.flatMap((p) => blobKeys(p.id)));
   doc.pages.forEach((p) => invalidateImages(p.id));
   await db.deleteDoc(doc.id);
   state.docs = state.docs.filter((d) => d.id !== doc.id);
   go({ name: 'library' });
+  toast('ลบเอกสารแล้ว', 'success');
 }
 
 // MARK: - ส่งออก / แชร์
+//
+// iOS เปิดเมนูแชร์ได้เฉพาะ "ทันที" ที่ผู้ใช้แตะปุ่ม จึงเตรียมไฟล์ไว้ล่วงหน้าตอนเปิดหน้าเอกสาร/หน้า
+// เมื่อแตะแชร์จะเรียก navigator.share ได้ทันทีในแตะเดียว
 
-async function exportPDF(doc, pages, name) {
-  busy('กำลังสร้าง PDF…');
-  await nextFrame();
-  try {
-    const items = [];
-    for (const page of pages) {
-      const blob = await db.getBlob(`${page.id}/proc`);
-      if (blob) items.push({ blob, paper: page.paper, dpi: page.dpi || settings.dpi });
-    }
-    const pdf = await buildPDF(items, name);
-    busy(null);
-    showShareSheet([new File([pdf], `${safeFileName(name)}.pdf`, { type: 'application/pdf' })]);
-  } catch (err) {
-    console.error(err);
-    busy(null);
-    toast('สร้าง PDF ไม่สำเร็จ');
+const exportCache = new Map(); // signature → { files, promise }
+
+function exportEntry(kind, pages, name) {
+  const sig = `${kind}|${name}|${pages.map((p) => `${p.id}:${p.rev || 0}:${p.paper}:${p.dpi}`).join(',')}`;
+  let entry = exportCache.get(sig);
+  if (!entry) {
+    entry = { files: null };
+    entry.promise = (kind === 'pdf' ? makePdfFiles(pages, name) : makeImageFiles(pages, name))
+      .then((files) => { entry.files = files; return files; })
+      .catch((err) => { exportCache.delete(sig); throw err; });
+    exportCache.set(sig, entry);
+    while (exportCache.size > 8) exportCache.delete(exportCache.keys().next().value);
   }
+  return entry;
 }
 
-async function exportImages(doc, pages, name) {
+/** เตรียมไฟล์ไว้เบื้องหลัง (เรียกซ้ำได้ ไม่ทำงานซ้ำถ้าไม่มีอะไรเปลี่ยน) */
+function warmExports(pages, name) {
+  if (!pages.length) return;
+  setTimeout(() => {
+    exportEntry('pdf', pages, name).promise.catch(() => {});
+    exportEntry('images', pages, name).promise.catch(() => {});
+  }, 400);
+}
+
+async function makePdfFiles(pages, name) {
+  const items = [];
+  for (const page of pages) {
+    const blob = await db.getBlob(`${page.id}/proc`);
+    if (blob) items.push({ blob, paper: page.paper, dpi: page.dpi || settings.dpi });
+  }
+  if (!items.length) throw new Error('no pages');
+  const pdf = await buildPDF(items, name);
+  return [new File([pdf], `${safeFileName(name)}.pdf`, { type: 'application/pdf' })];
+}
+
+async function makeImageFiles(pages, name) {
   const files = [];
   for (let i = 0; i < pages.length; i++) {
     const blob = await db.getBlob(`${pages[i].id}/proc`);
     const suffix = pages.length > 1 ? `_${i + 1}` : '';
     if (blob) files.push(new File([blob], `${safeFileName(name)}${suffix}.jpg`, { type: 'image/jpeg' }));
   }
-  if (files.length) showShareSheet(files);
+  if (!files.length) throw new Error('no pages');
+  return files;
 }
 
-/**
- * iOS อนุญาตให้เปิดเมนูแชร์เฉพาะตอนผู้ใช้แตะปุ่มโดยตรง
- * จึงเตรียมไฟล์ให้เสร็จก่อน แล้วให้ผู้ใช้แตะ "แชร์" อีกครั้ง
- */
-function showShareSheet(files) {
+/** ต้องเรียกจาก event แตะโดยตรง (ห้ามมี await ก่อนหน้า) */
+function shareNow(kind, pages, name, hint) {
+  const entry = exportEntry(kind, pages, name);
+  if (entry.files && navigator.share) {
+    navigator.share({ files: entry.files }).catch((err) => {
+      if (err.name === 'AbortError') return;
+      console.warn(err);
+      showShareDialog(entry.files, hint); // ให้แตะอีกครั้งจากหน้าต่างนี้
+    });
+    return;
+  }
+  busy(kind === 'pdf' ? 'กำลังสร้าง PDF…' : 'กำลังเตรียมรูปภาพ…');
+  entry.promise.then(
+    (files) => { busy(null); showShareDialog(files, hint); },
+    (err) => { console.error(err); busy(null); toast('เตรียมไฟล์ไม่สำเร็จ', 'error'); });
+}
+
+const SAVE_PHOTOS_HINT = 'ในเมนูที่ขึ้นมา เลือก "บันทึกรูปภาพ"';
+const SAVE_FILES_HINT = 'ในเมนูที่ขึ้นมา เลือก "บันทึกไปยังไฟล์"';
+
+/** เมนูแชร์หลัก */
+function exportMenu(pages, name) {
+  warmExports(pages, name);
+  menuSheet(pages.length === 1 ? 'แชร์หน้านี้' : `แชร์ ${pages.length} หน้า`, [
+    { label: 'ส่งเข้า LINE', sub: 'ส่งเป็นรูปภาพ หรือไฟล์ PDF', icon: 'send', onClick: () => lineGuide(pages, name) },
+    { label: 'บันทึกลงคลังภาพ', sub: SAVE_PHOTOS_HINT, icon: 'image', onClick: () => shareNow('images', pages, name, SAVE_PHOTOS_HINT) },
+    { label: 'แชร์ PDF', sub: 'Mail, AirDrop, บันทึกไปยังไฟล์ และแอปอื่น', icon: 'file', onClick: () => shareNow('pdf', pages, name) },
+  ]);
+}
+
+/** LINE ไม่รับ PDF จากเว็บแอปโดยตรง → ส่งเป็นรูป หรือบันทึก PDF ลงแอปไฟล์แล้วแนบจาก LINE */
+function lineGuide(pages, name) {
+  const step = (num, title, desc, action) =>
+    h('li', { class: 'app-step' },
+      h('span', { class: 'ds-badge ds-badge--primary' }, num),
+      h('div', { class: 'ds-stack ds-stack--sm app-step__body' },
+        h('div', null,
+          h('div', { class: 'ds-text-label' }, title),
+          h('div', { class: 'ds-help' }, desc)),
+        action));
+
+  const { close } = openDialog({
+    title: 'ส่งเข้า LINE',
+    iconName: 'send',
+    body: h('div', { class: 'ds-stack' },
+      h('section', { class: 'app-option ds-stack ds-stack--md' },
+        h('div', { class: 'ds-row' },
+          h('span', { class: 'ds-text-heading' }, 'แบบรูปภาพ'),
+          h('span', { class: 'ds-badge ds-badge--success' }, 'ง่ายที่สุด')),
+        h('p', { class: 'ds-help' }, 'แตะแล้วเลือก LINE ในเมนูแชร์ได้ทันที'),
+        h('button', {
+          type: 'button', class: 'ds-btn ds-btn--primary ds-btn--lg ds-btn--block',
+          onclick: () => { close(); shareNow('images', pages, name); },
+        }, icon('image'), pages.length > 1 ? `ส่ง ${pages.length} รูปเข้า LINE` : 'ส่งรูปเข้า LINE')),
+      h('section', { class: 'app-option ds-stack ds-stack--md' },
+        h('div', { class: 'ds-row' },
+          h('span', { class: 'ds-text-heading' }, 'แบบไฟล์ PDF'),
+          h('span', { class: 'ds-badge' }, '2 ขั้นตอน')),
+        h('ol', { class: 'app-steps' },
+          step('1', 'บันทึก PDF ลงแอปไฟล์', SAVE_FILES_HINT,
+            h('button', { type: 'button', class: 'ds-btn ds-btn--block', onclick: () => shareNow('pdf', pages, name, SAVE_FILES_HINT) },
+              icon('download'), 'บันทึก PDF')),
+          step('2', 'แนบไฟล์ในแชท LINE', 'เลือกแชท → กด + → ไฟล์ → เลือก PDF ที่บันทึกไว้',
+            h('a', { class: 'ds-btn ds-btn--block', href: 'line://nv/chat' }, icon('send'), 'เปิด LINE')))),
+      h('p', { class: 'ds-help' }, 'ไม่เห็น LINE ในเมนูแชร์? เลื่อนแถวแอปไปทางขวาสุด → "เพิ่มเติม" → เปิด LINE')),
+    footer: h('button', { type: 'button', class: 'ds-btn', onclick: () => close() }, 'ปิด'),
+  });
+}
+
+/** สำรอง: ใช้เมื่อไฟล์ยังไม่พร้อมตอนแตะ หรือแชร์ครั้งแรกไม่สำเร็จ */
+function showShareDialog(files, hint) {
   const totalSize = files.reduce((s, f) => s + f.size, 0);
-  const canShare = !!(navigator.canShare && navigator.canShare({ files }));
-  const close = () => backdrop.remove();
+  const isPdf = files[0].type === 'application/pdf';
 
   const share = async () => {
     try {
@@ -509,7 +649,7 @@ function showShareSheet(files) {
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.error(err);
-        toast('แชร์ไม่สำเร็จ ลองใช้ "บันทึกไฟล์"');
+        toast('แชร์ไม่สำเร็จ', 'error');
       }
     }
   };
@@ -523,52 +663,59 @@ function showShareSheet(files) {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
+    close();
   };
 
-  const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => e.target === backdrop && close() },
-    h('div', { class: 'sheet' },
-      h('div', { class: 'sheet-title' }, 'ไฟล์พร้อมแล้ว'),
-      h('div', { class: 'file-summary' },
-        icon(files[0].type === 'application/pdf' ? 'file' : 'image', 28),
-        h('div', null,
-          h('div', { class: 'file-name' }, files.length === 1 ? files[0].name : `${files.length} ไฟล์`),
-          h('div', { class: 'file-size' }, fmtBytes(totalSize)))),
-      canShare && h('button', { class: 'btn primary block', onclick: share }, icon('share'), 'แชร์ (LINE, AirDrop, …)'),
-      h('button', { class: 'btn block', onclick: download }, icon('download'), 'บันทึกไฟล์'),
-      h('button', { class: 'sheet-item cancel', onclick: close }, 'ปิด')));
-  document.body.append(backdrop);
+  const { close } = openDialog({
+    title: 'ไฟล์พร้อมแล้ว',
+    iconName: 'check',
+    variant: 'success',
+    body: h('div', { class: 'ds-stack ds-stack--md' },
+      h('div', { class: 'ds-list-item' },
+        h('span', { class: 'ds-file-icon' }, icon(isPdf ? 'file' : 'images')),
+        h('div', { class: 'ds-list-item__body' },
+          h('div', { class: 'ds-list-item__title' }, files.length === 1 ? files[0].name : `${files.length} ไฟล์`),
+          h('div', { class: 'ds-list-item__meta' }, fmtBytes(totalSize)))),
+      hint && h('div', { class: 'ds-alert ds-alert--info' }, icon('info'), h('div', { class: 'ds-alert__content' }, hint))),
+    footer: [
+      h('button', { type: 'button', class: 'ds-btn', onclick: () => close() }, 'ปิด'),
+      navigator.share
+        ? h('button', { type: 'button', class: 'ds-btn ds-btn--primary', onclick: share }, icon('share'), 'แชร์')
+        : h('button', { type: 'button', class: 'ds-btn ds-btn--primary', onclick: download }, icon('download'), 'ดาวน์โหลด'),
+    ],
+  });
 }
 
 // MARK: - ตั้งค่า
 
-async function openSettings() {
-  const close = () => backdrop.remove();
-  const select = (label, options, key, cast = String) =>
-    h('label', { class: 'field' },
-      h('span', null, label),
+function openSettings() {
+  const field = (id, label, options, key, cast = String) =>
+    h('div', { class: 'ds-field' },
+      h('label', { class: 'ds-label', for: id }, label),
       h('select', {
+        id, class: 'ds-select',
         onchange: (e) => { settings[key] = cast(e.target.value); saveSettings(); },
       }, Object.entries(options).map(([value, text]) =>
         h('option', { value, selected: String(settings[key]) === value }, text))));
 
-  const storage = h('p', { class: 'muted' }, '');
+  const storage = h('p', { class: 'ds-help' }, `เอกสาร ${state.docs.length} รายการ`);
   if (navigator.storage?.estimate) {
     navigator.storage.estimate().then(({ usage }) => {
-      storage.textContent = `พื้นที่ที่ใช้: ${fmtBytes(usage || 0)} · เอกสาร ${state.docs.length} รายการ`;
+      storage.textContent = `เอกสาร ${state.docs.length} รายการ · ใช้พื้นที่ ${fmtBytes(usage || 0)}`;
     });
   }
 
-  const backdrop = h('div', { class: 'sheet-backdrop', onclick: (e) => e.target === backdrop && close() },
-    h('div', { class: 'sheet' },
-      h('div', { class: 'sheet-title' }, 'ตั้งค่า'),
-      h('div', { class: 'fields' },
-        select('ขนาดกระดาษเริ่มต้น', Object.fromEntries(Object.entries(PAPER).map(([k, v]) => [k, v.label])), 'paper'),
-        select('ฟิลเตอร์เริ่มต้น', FILTERS, 'filter'),
-        select('ความละเอียด', { 150: '150 dpi (ไฟล์เล็ก)', 200: '200 dpi (แนะนำ)', 300: '300 dpi (คมที่สุด)' }, 'dpi', Number)),
-      h('p', { class: 'muted' }, 'ค่าเหล่านี้ใช้กับหน้าที่สแกนใหม่ และปรับแต่ละหน้าภายหลังได้'),
-      storage,
-      h('button', { class: 'sheet-item cancel', onclick: close }, 'เสร็จ')));
-  document.body.append(backdrop);
+  const { close } = openDialog({
+    title: 'ตั้งค่า',
+    iconName: 'settings',
+    body: h('div', { class: 'ds-stack' },
+      field('set-paper', 'ขนาดกระดาษเริ่มต้น', PAPER_LABELS, 'paper'),
+      field('set-filter', 'ฟิลเตอร์เริ่มต้น', FILTERS, 'filter'),
+      field('set-dpi', 'ความละเอียด', { 150: '150 dpi (ไฟล์เล็ก)', 200: '200 dpi (แนะนำ)', 300: '300 dpi (คมที่สุด)' }, 'dpi', Number),
+      h('p', { class: 'ds-help' }, 'ใช้กับหน้าที่สแกนใหม่ และปรับแต่ละหน้าภายหลังได้'),
+      storage),
+    footer: h('button', { type: 'button', class: 'ds-btn ds-btn--primary', onclick: () => close() }, 'เสร็จ'),
+  });
 }
 
 // MARK: - เริ่มต้น
@@ -578,7 +725,7 @@ async function init() {
     state.docs = (await db.allDocs()).sort((a, b) => b.updatedAt - a.updatedAt);
   } catch (err) {
     console.error(err);
-    toast('เปิดฐานข้อมูลไม่ได้');
+    toast('เปิดฐานข้อมูลไม่ได้', 'error');
   }
   render();
   // ขอให้เบราว์เซอร์เก็บข้อมูลถาวร ไม่ลบอัตโนมัติ

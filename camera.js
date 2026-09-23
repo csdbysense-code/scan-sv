@@ -3,7 +3,10 @@
 
 import { detectQuad } from './detect.js';
 import { icon } from './icons.js';
+import { confirmDialog } from './ui.js';
 import { canvasToBlob, createCanvas, h, releaseCanvas } from './util.js';
+
+const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 /** คืนค่า Promise<Blob[] | null> */
 export function openCamera() {
@@ -16,18 +19,21 @@ export function openCamera() {
     let missed = 0;
     let torchOn = false;
     let closed = false;
+    const accent = token('--color-secondary');
 
-    const video = h('video', { class: 'cam-video', playsinline: true, muted: true, autoplay: true });
+    const video = h('video', { class: 'app-camera__video', playsinline: true, muted: true, autoplay: true });
     video.muted = true;
-    const overlay = h('canvas', { class: 'cam-overlay' });
-    const flashFx = h('div', { class: 'cam-flash' });
-    const message = h('div', { class: 'cam-message', hidden: true });
-    const resolutionLabel = h('span', { class: 'cam-res' });
+    const overlay = h('canvas', { class: 'app-camera__overlay' });
+    const flashFx = h('div', { class: 'app-camera__flash' });
+    const message = h('div', { class: 'app-camera__message', hidden: true });
+    const resolutionLabel = h('span', { class: 'ds-text-caption app-camera__res' });
 
-    const torchButton = h('button', { class: 'cam-icon', hidden: true, 'aria-label': 'ไฟฉาย', onclick: toggleTorch }, icon('flash'));
-    const thumb = h('button', { class: 'cam-thumb', disabled: true, onclick: openReview });
-    const doneButton = h('button', { class: 'btn primary', disabled: true, onclick: finish }, 'เสร็จ');
-    const shutter = h('button', { class: 'cam-shutter', 'aria-label': 'ถ่ายภาพ', onclick: capture }, h('span'));
+    const torchButton = h('button', {
+      type: 'button', class: 'ds-btn ds-btn--ghost ds-btn--icon', hidden: true, 'aria-label': 'ไฟฉาย', 'aria-pressed': 'false', onclick: toggleTorch,
+    }, icon('flash'));
+    const thumb = h('button', { type: 'button', class: 'app-camera__thumb', disabled: true, 'aria-label': 'ดูภาพที่ถ่ายแล้ว', onclick: openReview });
+    const doneButton = h('button', { type: 'button', class: 'ds-btn ds-btn--secondary ds-btn--lg', disabled: true, onclick: finish }, 'เสร็จ');
+    const shutter = h('button', { type: 'button', class: 'app-camera__shutter', 'aria-label': 'ถ่ายภาพ', onclick: capture }, h('span'));
 
     const nativeInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
     nativeInput.addEventListener('change', () => {
@@ -36,18 +42,19 @@ export function openCamera() {
       start();
     });
 
-    const root = h('div', { class: 'fullscreen camera' },
-      h('div', { class: 'cam-top' },
-        h('button', { class: 'cam-icon', 'aria-label': 'ปิด', onclick: cancel }, icon('close')),
+    const root = h('div', { class: 'app-fullscreen app-camera' },
+      h('div', { class: 'app-dark-bar app-camera__top' },
+        h('button', { type: 'button', class: 'ds-btn ds-btn--ghost ds-btn--icon', 'aria-label': 'ปิด', onclick: cancel }, icon('close')),
         resolutionLabel,
         torchButton),
-      h('div', { class: 'cam-stage' }, video, overlay, flashFx, message),
-      h('div', { class: 'cam-bottom' },
-        h('div', { class: 'cam-side' }, thumb),
+      h('div', { class: 'app-stage' }, video, overlay, flashFx, message),
+      h('div', { class: 'app-dark-bar app-camera__bottom' },
+        h('div', { class: 'app-camera__side' }, thumb),
         shutter,
-        h('div', { class: 'cam-side right' }, doneButton)),
-      h('div', { class: 'cam-extra' },
-        h('button', { class: 'btn ghost small', onclick: openNativeCamera }, icon('aperture', 18), 'กล้อง iPhone (ละเอียดสูง + แฟลช)')),
+        h('div', { class: 'app-camera__side app-camera__side--end' }, doneButton)),
+      h('div', { class: 'app-dark-bar app-camera__extra' },
+        h('button', { type: 'button', class: 'ds-btn ds-btn--sm', onclick: openNativeCamera },
+          icon('aperture'), 'กล้อง iPhone (ละเอียดสูง + แฟลช)')),
       nativeInput);
 
     document.body.append(root);
@@ -110,9 +117,10 @@ export function openCamera() {
       message.hidden = !text;
       message.replaceChildren();
       if (!text) return;
-      message.append(h('p', null, text));
+      message.append(h('p', { class: 'ds-text-body' }, text));
       if (withRetry) {
-        message.append(h('button', { class: 'btn primary', onclick: () => { stopStream(); start(); } }, 'เปิดกล้องอีกครั้ง'));
+        message.append(h('button', { type: 'button', class: 'ds-btn ds-btn--secondary', onclick: () => { stopStream(); start(); } },
+          icon('camera'), 'เปิดกล้องอีกครั้ง'));
       }
     }
 
@@ -157,19 +165,22 @@ export function openCamera() {
         if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
       });
       ctx.closePath();
-      ctx.fillStyle = 'rgba(59,130,246,0.22)';
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.18;
       ctx.fill();
+      ctx.globalAlpha = 1;
       ctx.lineWidth = 3;
-      ctx.strokeStyle = '#3b82f6';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = accent;
       ctx.stroke();
     }
 
     async function capture() {
       if (!video.videoWidth) return;
       shutter.disabled = true;
-      flashFx.classList.remove('on');
+      flashFx.classList.remove('is-on');
       void flashFx.offsetWidth;
-      flashFx.classList.add('on');
+      flashFx.classList.add('is-on');
       if (navigator.vibrate) navigator.vibrate(20);
       const canvas = createCanvas(video.videoWidth, video.videoHeight);
       try {
@@ -198,7 +209,7 @@ export function openCamera() {
       } catch {
         torchOn = false;
       }
-      torchButton.classList.toggle('active', torchOn);
+      torchButton.setAttribute('aria-pressed', String(torchOn));
     }
 
     function addShot(blob) {
@@ -213,32 +224,36 @@ export function openCamera() {
       doneButton.disabled = !last;
       doneButton.textContent = shots.length ? `เสร็จ (${shots.length})` : 'เสร็จ';
       if (last) {
-        thumb.append(h('img', { src: last.url, alt: '' }), h('span', { class: 'badge' }, String(shots.length)));
+        thumb.append(
+          h('img', { src: last.url, alt: '' }),
+          h('span', { class: 'ds-badge ds-badge--secondary app-camera__count' }, String(shots.length)));
       }
     }
 
     function openReview() {
-      const list = h('div', { class: 'review-list' });
+      const list = h('div', { class: 'app-review__list' });
       const render = () => {
         list.replaceChildren(...shots.map((shot, i) =>
-          h('div', { class: 'review-item' },
+          h('figure', { class: 'ds-media-card app-review__item' },
             h('img', { src: shot.url, alt: `ภาพที่ ${i + 1}` }),
-            h('span', { class: 'review-num' }, String(i + 1)),
-            h('button', {
-              class: 'review-del', 'aria-label': 'ลบภาพ',
-              onclick: () => {
-                URL.revokeObjectURL(shot.url);
-                shots.splice(i, 1);
-                updateBottom();
-                if (!shots.length) panel.remove(); else render();
-              },
-            }, icon('trash', 18)))));
+            h('span', { class: 'ds-media-card__corner ds-media-card__corner--left' },
+              h('span', { class: 'ds-badge ds-badge--primary' }, String(i + 1))),
+            h('span', { class: 'ds-media-card__corner' },
+              h('button', {
+                type: 'button', class: 'ds-btn ds-btn--danger ds-btn--icon ds-btn--sm', 'aria-label': `ลบภาพที่ ${i + 1}`,
+                onclick: () => {
+                  URL.revokeObjectURL(shot.url);
+                  shots.splice(i, 1);
+                  updateBottom();
+                  if (!shots.length) panel.remove(); else render();
+                },
+              }, icon('trash'))))));
       };
-      const panel = h('div', { class: 'review' },
-        h('div', { class: 'review-head' },
-          h('strong', null, 'ภาพที่ถ่ายแล้ว'),
-          h('button', { class: 'btn small', onclick: () => panel.remove() }, 'ปิด')),
-        list);
+      const panel = h('div', { class: 'ds-card app-review' },
+        h('div', { class: 'ds-card__header' },
+          h('div', { class: 'ds-card__title' }, icon('images'), 'ภาพที่ถ่ายแล้ว'),
+          h('button', { type: 'button', class: 'ds-btn ds-btn--sm', onclick: () => panel.remove() }, 'ปิด')),
+        h('div', { class: 'ds-card__body' }, list));
       render();
       root.append(panel);
     }
@@ -258,8 +273,14 @@ export function openCamera() {
       resolve(blobs);
     }
 
-    function cancel() {
-      if (shots.length && !confirm(`ทิ้งภาพที่ถ่ายไว้ ${shots.length} ภาพ?`)) return;
+    async function cancel() {
+      if (shots.length) {
+        const ok = await confirmDialog({
+          title: 'ทิ้งภาพที่ถ่ายไว้?', message: `ภาพที่ถ่ายไว้ ${shots.length} ภาพจะไม่ถูกบันทึก`,
+          confirmText: 'ทิ้งภาพ', cancelText: 'ถ่ายต่อ', variant: 'danger',
+        });
+        if (!ok) return;
+      }
       cleanup();
       resolve(null);
     }

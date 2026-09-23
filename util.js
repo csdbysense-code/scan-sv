@@ -60,8 +60,12 @@ export async function blobToCanvas(blob, maxSide = Infinity) {
   const url = URL.createObjectURL(blob);
   try {
     const img = new Image();
-    img.src = url;
-    await img.decode();
+    // ใช้ event load แทน img.decode() เพราะ decode() ค้างเมื่อหน้าอยู่เบื้องหลัง
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('โหลดภาพไม่ได้'));
+      img.src = url;
+    });
     const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
     const canvas = createCanvas(
       Math.max(1, Math.round(img.naturalWidth * scale)),

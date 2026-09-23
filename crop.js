@@ -5,6 +5,8 @@ import { FULL_QUAD } from './processing.js';
 import { icon } from './icons.js';
 import { clamp, h, releaseCanvas, scaleCanvas } from './util.js';
 
+const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const LOUPE = 120; // px (CSS)
 const ZOOM = 2.5;
@@ -17,28 +19,30 @@ export function openCropEditor(originalBlob, initialQuad) {
     let drag = null;
 
     const url = URL.createObjectURL(originalBlob);
-    const img = h('img', { class: 'crop-img', src: url, alt: '', draggable: 'false' });
+    const img = h('img', { class: 'app-crop__img', src: url, alt: '', draggable: 'false' });
     const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.classList.add('crop-svg');
+    svg.classList.add('app-crop__svg');
     const polygon = document.createElementNS(SVG_NS, 'polygon');
     svg.append(polygon);
-    const handles = quad.map((_, i) => h('div', { class: 'crop-handle', 'data-i': i }));
-    const stage = h('div', { class: 'crop-stage' }, img, svg, ...handles);
+    const handles = quad.map((_, i) => h('div', { class: 'app-crop__handle', 'data-i': i, role: 'slider', 'aria-label': `มุมที่ ${i + 1}` }));
+    const stage = h('div', { class: 'app-crop__stage' }, img, svg, ...handles);
     const dpr = window.devicePixelRatio || 1;
-    const loupe = h('canvas', { class: 'loupe', width: LOUPE * dpr, height: LOUPE * dpr, hidden: true });
-    const area = h('div', { class: 'crop-area' }, stage, loupe);
-    const autoButton = h('button', { class: 'btn', onclick: autoDetect }, icon('wand', 18), 'หาขอบอัตโนมัติ');
+    const loupe = h('canvas', { class: 'app-crop__loupe', width: LOUPE * dpr, height: LOUPE * dpr, hidden: true });
+    const area = h('div', { class: 'app-stage app-crop__area' }, stage, loupe);
+    const autoButton = h('button', { type: 'button', class: 'ds-btn', onclick: autoDetect }, icon('wand'), 'หาขอบอัตโนมัติ');
 
-    const root = h('div', { class: 'fullscreen crop' },
-      h('header', { class: 'bar top dark' },
-        h('button', { class: 'btn text', onclick: () => close(null) }, 'ยกเลิก'),
-        h('div', { class: 'bar-title' }, 'ปรับขอบกระดาษ'),
-        h('button', { class: 'btn text strong', onclick: () => close(quad) }, 'ตกลง')),
+    const root = h('div', { class: 'app-fullscreen app-crop' },
+      h('div', { class: 'app-dark-bar app-crop__top' },
+        h('button', { type: 'button', class: 'ds-btn ds-btn--ghost', onclick: () => close(null) }, 'ยกเลิก'),
+        h('h2', { class: 'app-dark-bar__title' }, 'ปรับขอบกระดาษ'),
+        h('button', { type: 'button', class: 'ds-btn ds-btn--secondary', onclick: () => close(quad) }, icon('check'), 'ตกลง')),
       area,
-      h('footer', { class: 'bar bottom dark' },
-        autoButton,
-        h('button', { class: 'btn', onclick: () => { quad = FULL_QUAD.map((p) => ({ ...p })); draw(); } },
-          icon('expand', 18), 'ทั้งภาพ')));
+      h('div', { class: 'app-dark-bar app-crop__bottom' },
+        h('p', { class: 'ds-text-caption app-crop__hint' }, 'ลากจุดทั้ง 4 มุมให้ตรงขอบกระดาษ'),
+        h('div', { class: 'ds-row ds-row--nowrap app-crop__actions' },
+          autoButton,
+          h('button', { type: 'button', class: 'ds-btn', onclick: () => { quad = FULL_QUAD.map((p) => ({ ...p })); draw(); } },
+            icon('expand'), 'ทั้งภาพ'))));
 
     document.body.append(root);
     window.addEventListener('resize', layout);
@@ -49,7 +53,7 @@ export function openCropEditor(originalBlob, initialQuad) {
         e.preventDefault();
         el.setPointerCapture(e.pointerId);
         drag = { i, startX: e.clientX, startY: e.clientY, start: { ...quad[i] } };
-        el.classList.add('active');
+        el.classList.add('is-active');
         loupe.hidden = false;
         updateLoupe();
       });
@@ -64,7 +68,7 @@ export function openCropEditor(originalBlob, initialQuad) {
       });
       const end = () => {
         drag = null;
-        el.classList.remove('active');
+        el.classList.remove('is-active');
         loupe.hidden = true;
       };
       el.addEventListener('pointerup', end);
@@ -96,7 +100,7 @@ export function openCropEditor(originalBlob, initialQuad) {
       const p = quad[drag.i];
       const ctx = loupe.getContext('2d');
       const size = loupe.width;
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = token('--canvas-bg');
       ctx.fillRect(0, 0, size, size);
 
       // พื้นที่ในภาพต้นฉบับ (px) ที่จะแสดง — ตัดให้อยู่ในภาพ เพราะ Safari ไม่วาดถ้าเกินขอบ
@@ -110,14 +114,14 @@ export function openCropEditor(originalBlob, initialQuad) {
         ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0,
           (x0 - sx) * scale, (y0 - sy) * scale, (x1 - x0) * scale, (y1 - y0) * scale);
       }
-      ctx.strokeStyle = '#3b82f6';
+      ctx.strokeStyle = token('--color-secondary');
       ctx.lineWidth = 2 * dpr;
       ctx.beginPath();
       ctx.moveTo(size / 2, size / 2 - 12 * dpr); ctx.lineTo(size / 2, size / 2 + 12 * dpr);
       ctx.moveTo(size / 2 - 12 * dpr, size / 2); ctx.lineTo(size / 2 + 12 * dpr, size / 2);
       ctx.stroke();
 
-      loupe.classList.toggle('right', p.x < 0.5);
+      loupe.classList.toggle('is-right', p.x < 0.5);
     }
 
     function autoDetect() {
@@ -128,8 +132,7 @@ export function openCropEditor(originalBlob, initialQuad) {
         quad = found;
         draw();
       } else {
-        autoButton.classList.add('shake');
-        setTimeout(() => autoButton.classList.remove('shake'), 500);
+        window.DS.toast('หาขอบกระดาษไม่เจอ ลองลากมุมเอง', 'warning');
       }
     }
 
