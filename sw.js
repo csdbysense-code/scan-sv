@@ -1,24 +1,24 @@
 // เก็บไฟล์ของแอปไว้ในเครื่อง → เปิดได้แม้ไม่มีอินเทอร์เน็ต
 // ใช้ไฟล์ในเครื่องก่อน แล้วอัปเดตจากเซิร์ฟเวอร์เบื้องหลัง (เวอร์ชันใหม่จะมีผลเมื่อเปิดแอปครั้งถัดไป)
 
-const CACHE = 'scansv-v1';
+const CACHE = 'scansv-v2';
 const ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/app.css',
-  './js/app.js',
-  './js/camera.js',
-  './js/crop.js',
-  './js/db.js',
-  './js/detect.js',
-  './js/icons.js',
-  './js/pdf.js',
-  './js/processing.js',
-  './js/util.js',
-  './icons/icon-180.png',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
+  './app.css',
+  './app.js',
+  './camera.js',
+  './crop.js',
+  './db.js',
+  './detect.js',
+  './icons.js',
+  './pdf.js',
+  './processing.js',
+  './util.js',
+  './icon-180.png',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
